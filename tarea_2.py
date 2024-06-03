@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from tabulate import tabulate
 
-import case39 as mpc
+from pypower.api import case39 as mpc
 sep = mpc.case39()
 
 t0 = time.time() # Tiempo inicial formulación
@@ -219,7 +219,7 @@ for h in range(nh):
     if h==0:
         m.addConstr( CU[:,h] >= np.diag(CUg)@(b_gt[:,h]-B_g0) )
     else:
-        m.addConstr( CU[:,h] >= np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )
+        m.addConstr( CU[:,h] > np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )
 
     #Restricciones sistema de transmisión
     if tras or virtual:

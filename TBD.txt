@@ -1,0 +1,2 @@
+REVISAR ecuación 4 --> Si los valores C_on son todos mayores a 0 ???
+CHECK generador virtual 
