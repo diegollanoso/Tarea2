@@ -41,33 +41,35 @@ Load_bus = sep['bus'][:,2]
 
 # Transmission data
 nl = len(sep['branch']) # number of transmission elements
-SF = sep['SF'] # shift-factors
+SF = sep['SFR'] # shift-factors
 FM = sep['branch'][:,5] # thermal limit
-FM[23] = 50
 from_b = (sep['branch'][:,0]-1).astype(int)
 to_b = (sep['branch'][:,1]-1).astype(int)
-
+L=6
+A = sep['S']
+G = sep['G']
+B = sep['B']
 
 
 # Generador virtual
-ind1=sep['bus'][:,0]
-for i in range(len(sep['bus'])):
-    for j in range(len(sep['gen'])):
-        if sep['bus'][:,0][i] == sep['gen'][:,0][j]:
-            ind1=np.delete(ind1,np.where(ind1 == sep['gen'][:,0][j]))
-        else:
-            continue
-ind1=ind1-1 #indice de barras sin generacion\n",
-indaux=[]
-for i in range(len(ind1)): 
-    for j in range(len(sep['bus'])): 
-        if ind1[i]+1 == sep['bus'][j,0] and sep['bus'][j,2] > 0:
-            indaux.append(j)
-        else:
-            continue
-indaux=np.array(indaux) #indice barras sin generacion y con demanda",
-Cens=np.array(sparse((np.ones(len(indaux)), (indaux,range(len(indaux)))), (len(sep['bus']), len(indaux))).todense())
-CENS=np.ones(len(indaux))*500
+#ind1=sep['bus'][:,0]
+#for i in range(len(sep['bus'])):
+#    for j in range(len(sep['gen'])):
+#        if sep['bus'][:,0][i] == sep['gen'][:,0][j]:
+#            ind1=np.delete(ind1,np.where(ind1 == sep['gen'][:,0][j]))
+#        else:
+#            continue
+#ind1=ind1-1 #indice de barras sin generacion\n",
+#indaux=[]
+#for i in range(len(ind1)): 
+#    for j in range(len(sep['bus'])): 
+#        if ind1[i]+1 == sep['bus'][j,0] and sep['bus'][j,2] > 0:
+#            indaux.append(j)
+#        else:
+#            continue
+#indaux=np.array(indaux) #indice barras sin generacion y con demanda",
+#Cens=np.array(sparse((np.ones(len(indaux)), (indaux,range(len(indaux)))), (len(sep['bus']), len(indaux))).todense())
+#CENS=np.ones(len(indaux))*500
 
 # Modelación
 m = Model('NCUC')  # se crea el modelo
@@ -80,14 +82,18 @@ b_gt = m.addMVar((ng,nh), vtype=GRB.BINARY, name='n_G') # variable binaria que i
 pbar_gt = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='Pbar_gt') # potencia de reserva de cada generador en cada hora
 C_on = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='CU')  # costos de encendido
 f = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='f')   # Flujo por cada línea
-p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
+ploss = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='ploss')   # Perdidas por cada línea
+dpk = m.addMVar((nl,L,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='dpk')   # Perdidas por cada línea por cada tramo
+fp = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='flujoP')   # Flujo positivo
+fn = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='flujoN')   # Flujo Negativo
+#p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
 
 
 # Optimization Function
 f_obj = 0 # OF
 Cop = 0
 Cup = 0
-Ce = 0 
+#Ce = 0 
 
 for h in range(nh):     # Ciclo para cada hora
     # Costos por uso
@@ -96,9 +102,10 @@ for h in range(nh):     # Ciclo para cada hora
     # Costos por encender unidades
     Cup += C_on[:,h].sum()
     # Costos generador Virtual
-    Ce += CENS @ p_ens[:,h]*Sb
+    #Ce += CENS @ p_ens[:,h]*Sb
 
-f_obj = Cop + Cup + Ce
+#f_obj = Cop + Cup + Ce
+f_obj = Cop + Cup
 
 m.setObjective(f_obj, GRB.MINIMIZE)
 m.getObjective()
@@ -107,12 +114,10 @@ for h in range(nh):     # Ciclo para cada hora
     #Balance Nodal
     # (Suma de MW gens) = (Dda)
     dda_bus = Dda[h] * Load_bus
-    m.addConstr(p_gt[:,h].sum() + p_ens[:,h].sum() == Dda[h]/Sb, name = 'Balance')
+    m.addConstr(p_gt[:,h].sum() == Dda[h]/Sb + ploss[:,h].sum(), name = 'Balance')
     #m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] +Cens@pens[:,h]- Dda_bus/Sb, name="Balance nodal") 
     # (Reserva total de gens) >= (110% Dda)
     m.addConstr( pbar_gt[:,h].sum() >= 1.1*Dda[h]/Sb, name="Reserva")
-    # Limitación de Gen Virtual
-    m.addConstr(-p_ens[:,h] >= -500/Sb, name='P_maxens')
 
 
     # Pmin y Pmax de P y P_disp
@@ -128,9 +133,15 @@ for h in range(nh):     # Ciclo para cada hora
         m.addConstr( C_on[:,h] >= np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )    # Ecuación (3) Carrión - Arroyo  
 
     # Sistema de transmisión
-    m.addConstr(f[:,h]== SF[:,pos_g] @ p_gt[:,h] + SF[:,indaux] @ p_ens[:,h]- SF @ dda_bus/Sb)
+    m.addConstr(f[:,h]== SF[:,pos_g] @ p_gt[:,h] - SF @ dda_bus/Sb - 0.5 * SF @ abs(S.T) @ ploss[:,h])
+    m.addConstr(f[:,h] == fp[:,h] - fn[:,h], name = 'f')
+    m.addConstr(fp[:,h] + fn[:,h] == dpk[:,:,h].sum(1), name = 'SumaDpk')  
+    kl = np.zeros(nl,l)
+    for l in range(L):
+        kl[:,l] = (2*(l+1)-1)*(FM/Sb)/L
+    m.addConstr(ploss[:,h] == G/(B**2)*(kl[:,:]*dpk[:,:,h].T).sum(), name = 'Ploss')  
     m.addConstr(-f[:,h] >= -FM/Sb, name = 'fp')
-    m.addConstr(f[:,h] >= -FM/Sb, name = 'fn')    
+    m.addConstr(f[:,h] >= -FM/Sb, name = 'fn')
 
 
 #Rampas 
@@ -146,7 +157,6 @@ for h in range(nh):     # Ciclo para cada hora
         m.addConstr( -pbar_gt[:,h] >= - p_gt[:,h-1] - ( np.diag(RUg) @ b_gt[:,h-1] + np.diag(SUg)@(b_gt[:,h]-b_gt[:,h-1]) + Pmax - np.diag(Pmax)@b_gt[:,h] )/Sb, name="CA_eq11" )
         # (MW en hora h-1 - MW en hora h) <= (Rampa Down * Gen ON en hora h)  +  (Shut Down * (Gen ON en hora h-1 - hora h)) + (Pmax) - (Pmax * Gen On en hora h-1)
         m.addConstr( -( p_gt[:,h-1] - p_gt[:,h] ) >= -( np.diag(RDg)@b_gt[:,h] + np.diag(SDg)@(b_gt[:,h-1]-b_gt[:,h]) + Pmax - np.diag(Pmax)@b_gt[:,h-1] )/Sb, name="CA_eq13" )
-
 for h in range(nh-1):
     # (P_bar en hora h) <= (Pmax * Gen On en hora h+1) + (Shut Down * (Gen On en hora h - hora h+1)
     m.addConstr( -pbar_gt[:,h] >= -( np.diag(Pmax)@b_gt[:,h+1] + np.diag(SDg)@( b_gt[:,h]- b_gt[:,h+1] ) )/Sb, name="CA_eq12" ) 
@@ -163,7 +173,7 @@ t3 = time.time() #Tiempo final solver
 
 status = m.Status
 if status == GRB.Status.OPTIMAL:
-    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cen = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Ce.getValue()))
+    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
@@ -173,39 +183,40 @@ elif status == GRB.Status.INF_OR_UNBD or \
    status == GRB.Status.UNBOUNDED:
    print('The model cannot be solved because it is infeasible or unbounded => status "%d"' % status)
 
-fig = plt.figure(figsize=(7, 10), dpi=150)
-gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
-ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(p_gt.x.T*(Sb/Pmax), cmap=plt.cm.jet, alpha=0.75)
-ax.set_xticks([k for k in range(ng)])
-ax.set_xticklabels([str(k+1) for k in range(ng)])
-ax.set_yticks([k for k in range(nh)])
-ax.set_ylabel('Tiempo (h)')
-ax.set_xlabel('Generadores')
-for g in range(ng):
-    for h in range(nh):
-        ax.text(g, h, np.around(p_gt.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
-ax = plt.subplot(gs[0, 1])
-fig.colorbar(sPlot, cax=ax, extend='both')
-ax.set_ylabel('Cargabilidad (%)')
-plt.show()
+if False:
+    fig = plt.figure(figsize=(7, 10), dpi=150)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(p_gt.x.T*(Sb/Pmax), cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(ng)])
+    ax.set_xticklabels([str(k+1) for k in range(ng)])
+    ax.set_yticks([k for k in range(nh)])
+    ax.set_ylabel('Tiempo (h)')
+    ax.set_xlabel('Generadores')
+    for g in range(ng):
+        for h in range(nh):
+            ax.text(g, h, np.around(p_gt.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
+    ax = plt.subplot(gs[0, 1])
+    fig.colorbar(sPlot, cax=ax, extend='both')
+    ax.set_ylabel('Cargabilidad (%)')
+    plt.show()
 
 
-fig = plt.figure(figsize=(7, 10), dpi=70)
-gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
-ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
-ax.set_xticks([k for k in range(nh)])
-ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl)]   )
-ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl)])
-ax.set_ylabel('Flujos (MW)')
-ax.set_xlabel('Hora (h)')
-for g in range(nl):
-    for h in range(nh):
-        ax.text( h, g, np.around(f.x.T[h,g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
-ax = plt.subplot(gs[0, 1])
-fig.colorbar(sPlot, cax=ax, extend='both')
-ax.set_ylabel('Cargabilidad (%)')
-plt.savefig('flujo_lineas.pdf')
-plt.show()        
+    fig = plt.figure(figsize=(7, 10), dpi=70)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(nh)])
+    ax.set_xticklabels([(k+1) for k in range(nh)])
+    ax.set_yticks( [k for k in range(nl)]   )
+    ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl)])
+    ax.set_ylabel('Flujos (MW)')
+    ax.set_xlabel('Hora (h)')
+    for g in range(nl):
+        for h in range(nh):
+            ax.text( h, g, np.around(f.x.T[h,g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
+    ax = plt.subplot(gs[0, 1])
+    fig.colorbar(sPlot, cax=ax, extend='both')
+    ax.set_ylabel('Cargabilidad (%)')
+    plt.savefig('flujo_lineas.pdf')
+    plt.show()        
