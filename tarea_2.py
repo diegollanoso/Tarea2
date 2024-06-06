@@ -1,6 +1,7 @@
 import gurobipy as gp
 from gurobipy import *
 import numpy as np
+import pandas as pan
 from numpy import diag, ones, pi, zeros, arange,array, ix_, r_, flatnonzero as find
 from numpy.linalg import solve, inv
 from scipy.sparse import csr_matrix as sparse
@@ -9,7 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from tabulate import tabulate
 
-from pypower.api import case39 as mpc
+import case39 as mpc
 sep = mpc.case39()
 
 t0 = time.time() # Tiempo inicial formulación
@@ -41,17 +42,19 @@ Cg = sep["Cg"]
 
 
 #seleccion de criterio
-tras=1
+Uc=0
+tras=0
 virtual=0
-ts=0
-caso=0
+switching=1
+caso=2
 loss=0
+completo=0
+adyacencia=0
 #Antes de limitar
 prueba=0
 if prueba:
     for i in range(len(sep['branch'])):
         sep['branch'][i,5]=1000
-
 #Limitación de Flujos
 if caso==1:
     sep['branch'][23,5] = 100
@@ -100,13 +103,14 @@ for i in range(len(ind1)):
             indaux.append(j)
         else:
             continue
+lista_ens=indaux
+n_ens=len(indaux)
 indaux=np.array(indaux) #indice barras sin generacion y con demanda",
 Cens=np.array(sparse((ones(len(indaux)), (indaux,range(len(indaux)))), (len(sep['bus']), len(indaux))).todense())
 CENS=np.ones(len(indaux))*500
 
-
 # Trabajo Previo a TS 
-if ts:
+if switching:
 #Líneas no candidatas a TS
     pl_nots = find(sep['branch'][:,17] == 0)    # posicion de lineas no candidatas a ts
     nl_nots = len(pl_nots)                      # numero de lineas no candidatas a ts
@@ -124,12 +128,16 @@ if ts:
     from_b_nots = np.delete(from_b,pl_ts,axis=0) # from lineas existentes
     to_b_nots = np.delete(to_b,pl_ts,axis=0)     # to lineas existentes
 
+    from_ts=sep['branch'][pl_ts,0]
+    to_ts=sep['branch'][pl_ts,1]
+
     M = 1000000
     costo_ts = 10
 
 # Initializing model
 m = Model('UC_tarea_1')
 m.setParam('OutputFlag', False)
+m.setParam('DualReductions',0)
 m.Params.MIPGap = 1e-6
 #m.setParam(GRB.Param.PoolSolutions, 10) # Limit how many solutions to collect
 #m.setParam(GRB.Param.PoolSearchMode, 2) # systematic search for the k-best solutions
@@ -143,7 +151,9 @@ CU = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='CU')                  
 if tras or virtual:
     d = m.addMVar((nb,nh), vtype=GRB.CONTINUOUS, ub=pi, lb=-pi, name="delta")                       # angulos de cada barra en cada hora
     f = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name="flujo")   # flujos de cada linea en cada hora
-if ts:
+if switching:
+    d = m.addMVar((nb,nh), vtype=GRB.CONTINUOUS, ub=pi, lb=-pi, name="delta")                       # angulos de cada barra en cada hora
+    f = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name="flujo")     
     s_ts = m.addMVar((nl_ts, nh), vtype=GRB.BINARY, name='s_ts')                                    # variable binaria de TS
 if virtual:
     pens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')                    # variable de generacion virtual
@@ -154,7 +164,10 @@ if loss:
     f_n=m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name="f_n")                 # flujo negativo en cada linea en cada hora
     d_f=m.addMVar((nl,L,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name="d_f")               # Delta flujo 
     p_loss=m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name="p_loss")           # Perdidas en cada hora
-    n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
+    if completo:
+        n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
+    if adyacencia and completo:
+        n_a = m.addMVar((nl,L,nh), vtype=GRB.BINARY, name='n_a')  
 # OPTIMIZATION PROBLEM
 f_obj = 0 # OF
 
@@ -162,14 +175,16 @@ Cop = 0
 Cup = 0
 Cts = 0
 Ce = 0
-
+total_loss=0
 for h in range(nh):
     Cop += p_gt[:,h]*Sb @ np.diag(sep["units"][:,2]) @ p_gt[:,h]*Sb + sep["units"][:,1] @ p_gt[:,h]*Sb + sep["units"][:,0] @ b_gt[:,h] 
     Cup += CU[:,h].sum()
-    if ts:
+    if switching:
         Cts += costo_ts * (1 - s_ts[:,h]).sum()                 # Cuando la línea sale de servicio s_ts=0, se aplica el costo del TS
     if virtual:
         Ce +=CENS@pens[:,h]*Sb
+    if loss:
+        total_loss += p_loss[:,h].sum()  
 
 f_obj = Cop + Cup + Cts + Ce
 
@@ -177,34 +192,34 @@ m.setObjective(f_obj, GRB.MINIMIZE)
 m.getObjective()
 
 #Creación de restricciones
-if ts:
+if switching:
     index_sinlts = np.delete(np.arange(0,nl),pl_ts, axis=0)
 #Restriccion 
 
 for h in range(nh):
     #Balance Nodal y Reserva   
-    if tras:
+    if tras or switching:
         Dda_bus = Dda[h] * sep["bus"][:,2]
-        m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] - Dda_bus/Sb, name="Balance nodal") 
+        m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] - Dda_bus/Sb, name="LCK") 
         m.addConstr( pbar_gt[:,h].sum() >= 1.1*Dda[h]/Sb, name="Reserva")
     
         #Angulo de referencia
         m.addConstr(d[SL,h] == 0, name="SL")
     if virtual:
         Dda_bus = Dda[h] * sep["bus"][:,2]
-        m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] +Cens@pens[:,h]- Dda_bus/Sb, name="Balance nodal") 
+        m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] +Cens@pens[:,h]- Dda_bus/Sb, name="LCK") 
         m.addConstr( pbar_gt[:,h].sum() >= 1.1*Dda[h]/Sb, name="Reserva")
         m.addConstr(-pens[:,h] >= -500/Sb, name='P_maxens')
         #Angulo de referencia
         m.addConstr(d[SL,h] == 0, name="SL")
     if loss:
         Dda_bus = Dda[h] * sep["bus"][:,2]
-        m.addConstr( A.T@f[:,h]== Cg@p_gt[:,h]-(Dda_bus/Sb+0.5*abs(A.T)@p_loss[:,h]), name="Balance nodal") 
+        m.addConstr( A.T@f[:,h]== Cg@p_gt[:,h]-(Dda_bus/Sb+0.5*abs(A.T)@p_loss[:,h]), name="LCK") 
         m.addConstr( pbar_gt[:,h].sum() >= 1.1*Dda[h]/Sb, name="Reserva")
         #Angulo de referencia
         m.addConstr(d[SL,h] == 0, name="SL")
-    else:
-        m.addConstr(p_gt[:,h].sum() == Dda[h]/Sb,name='Bal')                       # Ecuación (8) Carrión - Arroyo
+    if Uc:
+        m.addConstr(p_gt[:,h].sum() == Dda[h]/Sb,name="LCK")                       # Ecuación (8) Carrión - Arroyo
         m.addConstr(pbar_gt[:,h].sum() >= Dda[h]/Sb*1.1,name='Reserva')            # Ecuación (7) Carrión - Arroyo  
 
 
@@ -219,7 +234,7 @@ for h in range(nh):
     if h==0:
         m.addConstr( CU[:,h] >= np.diag(CUg)@(b_gt[:,h]-B_g0) )
     else:
-        m.addConstr( CU[:,h] > np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )
+        m.addConstr( CU[:,h] >= np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )
 
     #Restricciones sistema de transmisión
     if tras or virtual:
@@ -227,30 +242,45 @@ for h in range(nh):
         m.addConstr(-f[:,h] >= -FM/Sb, name = 'fp')
         m.addConstr(f[:,h] >= -FM/Sb, name = 'fn')
     if loss:
-        m.addConstr(f[:,h]== bloss@d[from_b,h] - bloss@d[to_b,h]) #flujo
-        m.addConstr(-f[:,h]-0.5*p_loss[:,h] >= -FM/Sb, name = 'fp')
-        m.addConstr(f[:,h]-0.5*p_loss[:,h] >= -FM/Sb, name = 'fn')
-        m.addConstr(f[:,h]==f_p[:,h]-f_n[:,h], name='Flujo_total') 
-        m.addConstr(-f_p[:,h]>=-n_l[:,h]*FM/Sb)   #flujo positvo-restriccion de complementaridad
-        m.addConstr(-f_n[:,h]>=(1-n_l[:,h])*(-FM/Sb)) #flujo nefativo-restriccion de complementaridad
+        m.addConstr(f[:,h]== bloss@d[from_b,h] - bloss@d[to_b,h]) #flujo considerando perdidas
+        m.addConstr(-f[:,h]-0.5*p_loss[:,h] >= -FM/Sb, name = 'f_p_loss')
+        m.addConstr(f[:,h]-0.5*p_loss[:,h] >= -FM/Sb, name = 'f_n_loss')
+        m.addConstr(f[:,h]==f_p[:,h]-f_n[:,h], name='Flujo_total')       
+        if completo:
+            m.addConstr(-f_p[:,h]>=-n_l[:,h]*FM/Sb, name='fp')   #flujo positvo-restriccion de complementaridad
+            m.addConstr(-f_n[:,h]>=(1-n_l[:,h])*(-FM/Sb), name='fn') #flujo nefativo-restriccion de complementaridad
+        else:
+            m.addConstr(-f_p[:,h]>=-FM/Sb, name='fp')   #flujo positvo-restriccion 
+            m.addConstr(-f_n[:,h]>=-FM/Sb, name='fn') #flujo nefativo-restriccion 
+        #if adyacencia:
+        #    for l in range(L): 
+        #        #Adyacencia--------------------------------------------------
+        #        if l==0:
+        #            m.addConstr(-d_f[:,l,h]>=-FM/(Sb*L), name='d_f_Res_max_A_l')
+        #            m.addConstr(d_f[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_l')
+        #        elif l==L-1:
+        #            m.addConstr(-d_f[:,l,h]>=-n_a[:,l,h]*FM/(Sb*L), name='d_f_Res_max_A_L')
+        #            m.addConstr(d_f[:,l,h]>=0, name='d_f_Res_min_A_L')
+        #        else:
+        #            m.addConstr(-d_f[:,l,h]>=-n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_max_A_L-1')
+        #            m.addConstr(d_f[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_L-1')
         for l in range(L): 
-            m.addConstr(-d_f[:,l,h]>=-FM/(Sb*L))
-        for i in range(nl):
-            m.addConstr(d_f[i,:,h].sum()==f_p[:,h]+f_n[:,h])
+            m.addConstr(-d_f[:,l,h]>=-FM/(Sb*L), name='d_f_Res_max')
+        m.addConstr(d_f[:,:,h].sum(1)==f_p[:,h]+f_n[:,h], name='d_f_Res')
         for i in range(nl):
             kl = np.zeros(L)
             for l in range(L):
                 kl[l] = (2*(l+1)-1)*(FM[i]/Sb)/L# 
-            m.addConstr(p_loss[i,h] == (G[i]/(B[i]**2)*((kl*d_f[i,:,h]).sum())))
+            m.addConstr(p_loss[i,h] == (G[i]/(B[i]**2)*((kl*d_f[i,:,h]).sum())), name='ploss_Res')
              
-    if ts:
-        m.addConstr( f[index_sinlts,h] == b_nots@d[from_b_nots,h] - b_nots@d[to_b_nots,h] )
+    if switching:
+        m.addConstr( f[index_sinlts,h] == b_nots@d[from_b_nots,h] - b_nots@d[to_b_nots,h])
         m.addConstr( f[index_sinlts,h] <= FM_lnots/Sb, name="flujo_max1")
         m.addConstr( f[index_sinlts,h] >= -FM_lnots/Sb, name="flujo_max2")
         for index_ts, ts in enumerate(pl_ts):  
-            m.addConstr(f[ts,h] - (b[ts,ts] * d[from_b[ts],h] - b[ts,ts] * d[to_b[ts],h]) <= (1- s_ts[index_ts,h])* M   , name = 'fe_ts_p'+'_' +str(ts))
-            m.addConstr(-f[ts,h] + (b[ts,ts] * d[from_b[ts],h] - b[ts,ts] * d[to_b[ts],h]) <= (1- s_ts[index_ts,h])* M  , name = 'fe_ts_n'+'_' +str(ts))
-            m.addConstr(f[ts,h] <= FM[ts]/Sb * s_ts[index_ts,h] , name = 'fe_p_ts'+'_' +str(ts))
+            m.addConstr(f[ts,h] - (b[ts,ts] * d[from_b[ts],h] - b[ts,ts] * d[to_b[ts],h]) >= -(1- s_ts[index_ts,h])* M   , name = 'fe_ts_p'+'_' +str(ts))
+            m.addConstr(-f[ts,h] + (b[ts,ts] * d[from_b[ts],h] - b[ts,ts] * d[to_b[ts],h]) >= -(1- s_ts[index_ts,h])* M  , name = 'fe_ts_n'+'_' +str(ts))
+            m.addConstr(-f[ts,h] >= -FM[ts]/Sb * s_ts[index_ts,h] , name = 'fe_p_ts'+'_' +str(ts))
             m.addConstr(f[ts,h] >= -FM[ts]/Sb * s_ts[index_ts,h], name = 'fe_n_ts'+'_' +str(ts))
 
 
@@ -273,17 +303,26 @@ t2 = time.time() #Tiempo inicial solver
 m.optimize()
 t3 = time.time() #Tiempo final solver
 
-if False:
-    m.write('UC_tarea_0.lp')      
+fixed=m.fixed()
+fixed.optimize()
+
 
 status = m.Status
 if status == GRB.Status.OPTIMAL:
-    if ts:
+    if switching:
         print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cts = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Cts.getValue()))
         print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
     elif virtual:
         print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cens = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Ce.getValue()))
         print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
+    elif loss:
+        print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
+        print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))       
+        print ('Total P_loss = %.2f [MW]'%(total_loss.getValue()*Sb))
+        for h in range(nh):
+            for l in range(f_p.getAttr('x').shape[0]):
+                if f_p.X[l,h]!=0 and f_n.X[l,h]!=0:
+                    print("f_p[%d,%d] = %.3f// f_n[%d,%d] = %.3f"%(l,h,f_p.X[l,h],l,h,f_n.X[l,h]))            
     else:
         print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) ' % (m.objVal,Cop.getValue(),Cup.getValue()))
         print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
@@ -296,25 +335,24 @@ if status == GRB.Status.OPTIMAL:
     # for h in range(nh):
     #     for l in range(b_gt.getAttr('x').shape[0]):
     #         print("n[%d,%d] = %.3f"%(l,h,b_gt.getAttr('x')[l,h]))   
-
-    # print ('Lagrange multipliers:')            
-    # for v in fixed.getConstrs():
-    #     if v.pi > 1e-2:
-    #         print('%s = %g ($/MWh)' % (v.ConstrName,v.pi))
-    #if tras:
-            #print ('Power flows:') 
-            #for h in range(nh): 
-            #    for l in range(nl):
-            #        print('f[%.0f-%.0f][%.0f] = %.3f (MW)' % (sep['branch'][l,0], sep['branch'][l,1],h+1, f.x[l,h]))
-    if ts:
-        for h in range(nh):
-            print('Lines candidates of Transmission Switching activates in hour %.0f'%h)
-            for l in range(nl_ts):
-                if s_ts.xn[l,h] < 0.5:
-                    print('n[%.0f-%.0f] = %.3f' % (sep['branch'][pl_ts[l],0], sep['branch'][pl_ts[l],1], 1-s_ts.xn[l,h]))
-                    print ('Power generation solution in hour %.0f (Pg): Load = %.0f' % (h,Dda[h]))
-                    for g in range(ng):
-                        print('p[%.0f,%.0f] = %.3f (MW)' % (g,h, Sb*p_gt.xn[g,h]))
+    if virtual:
+        df_name=[]
+        df_value=[]
+        df_h=1
+        contador=1
+        for v in fixed.getConstrs():
+            if abs(v.pi) > 1e-2:
+                if 'LCK' in v.ConstrName:
+                    print('%s = %g ($/MWh)' % (v.ConstrName,v.pi))
+                    df_name.append(v.ConstrName+str(df_h))
+                    df_value.append(v.pi/Sb)
+                    contador+=1
+                    if contador==nb+1:
+                        df_h+=1
+                        contador=1
+        df_test=pan.DataFrame([df_name,df_value])
+        df_test.T.to_csv(r"C:\Users\pocke\OneDrive\Desktop\Universidad\semestre 7-1\OSEP\tarea 2\resultados.csv", index=False)
+    if switching:
         vX = zeros([nh,ng]); pX = zeros([nh,ng]); ptX = zeros([nh,ng]); CUX = zeros([nh,ng]); s_tsX = zeros([nh,nl_ts])
         for t in range(nh):
             vX[t] = b_gt.x[:,t]
@@ -322,6 +360,11 @@ if status == GRB.Status.OPTIMAL:
             ptX[t] = pbar_gt.x[:,t]
             CUX[t] = CU.x[:,t]
             s_tsX[t] = s_ts.x[:,t]
+        print("Cantidad de valores iguales a cero:",np.count_nonzero(s_tsX.T == 0))
+        filas, columnas = np.nonzero(s_tsX==0)
+        #print("Ubicación de los valores iguales a cero:")
+        #for fila, columna in zip(filas, columnas):
+        #    print("Linea:", fila+1, "Hora:", columna+1) 
     else:
         vX = zeros([nh,ng]); pX = zeros([nh,ng]); ptX = zeros([nh,ng]); CUX = zeros([nh,ng])
         for t in range(nh):
@@ -333,6 +376,21 @@ if status == GRB.Status.OPTIMAL:
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
+    if switching: 
+        fig = plt.figure(figsize=(7, 10), dpi=150)
+        gs = gridspec.GridSpec(1, 2, width_ratios=[75,1], wspace=0)
+        ax = plt.subplot(gs[0, 0])
+        sPlot = ax.imshow(s_ts.x, cmap=plt.cm.jet, alpha=0.75)
+        ax.set_xticks([k for k in range(nh)])
+        ax.set_xticklabels([(k+1) for k in range(nh)])
+        ax.set_yticks( [k for k in range(nl_ts)]   )
+        ax.set_yticklabels([str('%.f-%.f' %(from_ts[g],to_ts[g])) for g in range(nl_ts)])
+        ax.set_ylabel('Switching (1/0) (MW)')
+        ax.set_xlabel('Hora (h)')
+        for g in range(nl_ts):
+            for h in range(nh):
+                ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
+        plt.show()  
 elif status == GRB.Status.INF_OR_UNBD or \
    status == GRB.Status.INFEASIBLE  or \
    status == GRB.Status.UNBOUNDED:
@@ -348,6 +406,7 @@ sPlot = ax.imshow(p_gt.x.T*(Sb/Pmaxg), cmap=plt.cm.jet, alpha=0.75)
 ax.set_xticks([k for k in range(ng)])
 ax.set_xticklabels([str(k+1) for k in range(ng)])
 ax.set_yticks([k for k in range(nh)])
+ax.set_yticklabels([str(k+1) for k in range(nh)])
 ax.set_ylabel('Tiempo (h)')
 ax.set_xlabel('Generadores')
 for g in range(ng):
@@ -358,29 +417,9 @@ fig.colorbar(sPlot, cax=ax, extend='both')
 ax.set_ylabel('Cargabilidad (%)')
 plt.show()
 
-#tabla 2
-#import matplotlib.pyplot as plt
-#import numpy as np
-#
-#num_h, num_gen = p_gt.X.T.shape
-#color_gen = np.random.rand(num_gen, 3) 
-#fig, ax = plt.subplots(figsize=(10, 6))
-#
-#for i in range(num_gen):
-#    ax.bar(range(num_h), p_gt.X.T[:, i]*Sb, bottom=np.sum(p_gt.X.T[:, :i]*Sb, axis=1), color=color_gen[i], label=f'Generador {i+1}')
-#
-#ax.set_xlabel('Hora')
-#ax.set_ylabel('Potencia Generada')
-#ax.set_title('Potencia Generada por Generador y Hora')
-#ax.set_xticks(range(num_h))
-#ax.set_xticklabels([f'H{h+1}' for h in range(num_h)])
-## ax.legend()
-#ax.legend(loc='lower left', bbox_to_anchor=(1, 0.5))
-## ax.legend(loc='upper right', bbox_to_anchor=(1, 0.5))
-# Mostrar el gráfico
-#plt.show()
-if tras or virtual:
-    fig = plt.figure(figsize=(7, 10), dpi=70)
+
+if tras or virtual or switching or loss:
+    fig = plt.figure(figsize=(7, 10), dpi=60)
     gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
     ax = plt.subplot(gs[0, 0])
     sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
@@ -398,21 +437,19 @@ if tras or virtual:
     ax.set_ylabel('Cargabilidad (%)')
     plt.savefig('flujo_lineas.pdf')
     plt.show()        
-    #fig = plt.figure(figsize=(7, 10), dpi=150)
-    #gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
-    #ax = plt.subplot(gs[0, 0])
-    #sPlot = ax.imshow(b_gt.x, cmap=plt.cm.jet, alpha=0.75)
-    #ax.set_xticks([k for k in range(nh)])
-    #ax.set_xticklabels([(k+1) for k in range(nh)])
-    #ax.set_yticks( [k for k in range(ng)]   )
-    #ax.set_yticklabels([str('%.f' %(ngen[g])) for g in range(ng)])
-    # ax.set_ylabel('Switching (1/0) (MW)')
-    #ax.set_ylabel('Estados (1/0)')
-    #ax.set_xlabel('Hora (h)')
-    #for g in range(ng):
-    #    for h in range(nh):
-    #        ax.text( h, g, np.around(b_gt.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
-    #ax = plt.subplot(gs[0, 1])
-    # fig.colorbar(sPlot, cax=ax, extend='both')
-    #plt.savefig('Estados.pdf')
-    #plt.show() 
+if virtual:
+    fig = plt.figure(figsize=(7, 10), dpi=100)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(pens.x.T*(Sb/500), cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(n_ens)])
+    ax.set_xticklabels([str(lista_ens[k]+1) for k in range(n_ens)])
+    ax.set_yticks([k for k in range(nh)])
+    ax.set_yticklabels([str(k+1) for k in range(nh)])
+    ax.set_ylabel('Tiempo (h)')
+    ax.set_xlabel('Barras generadores virtuales')
+    for g in range(n_ens): 
+        for h in range(nh):
+            ax.text(g, h, np.around(pens.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
+    plt.show()
+

@@ -42,8 +42,8 @@ Load_bus = sep['bus'][:,2]
 # Transmission data
 nl = len(sep['branch']) # number of transmission elements
 SF = sep['SF'] # shift-factors
+sep['branch'][23,5] = 75
 FM = sep['branch'][:,5] # thermal limit
-FM[23] = 75
 from_b = (sep['branch'][:,0]-1).astype(int)
 to_b = (sep['branch'][:,1]-1).astype(int)
 A = sep['S']
@@ -56,6 +56,8 @@ nl_nots = len(pl_nots)                      # numero de lineas no candidatas a t
 pl_ts = np.flatnonzero(sep['branch'][:,17] == 1)      # posicion de Lineas candidatas a switching
 nl_ts = len(pl_ts)                          # cantidad de lineas candidatas a switching
 index_sinlts = np.delete(np.arange(0,nl),pl_ts, axis=0)
+from_ts=sep['branch'][pl_ts,0]
+to_ts=sep['branch'][pl_ts,1]
 
 
 FM_lnots = np.delete(FM,pl_ts,axis=0)       # flujo de lineas existentes
@@ -156,7 +158,7 @@ for h in range(nh):     # Ciclo para cada hora
     #Restricciones sistema de transmisión lineas no candidatas    
     fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h] - SF[pl_nots,:]@dda_bus/Sb
     fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h]
-    m.addConstr(fe+fv <= FM_lnots/Sb, name = 'fe_p')
+    m.addConstr(-(fe+fv) >= -FM_lnots/Sb, name = 'fe_p')
     m.addConstr(fe+fv >= -FM_lnots/Sb, name = 'fe_n')
 
     #Restricciones sistema de transmisión lineas candidatas
@@ -214,6 +216,22 @@ elif status == GRB.Status.INF_OR_UNBD or \
    print('The model cannot be solved because it is infeasible or unbounded => status "%d"' % status)
 
 fig = plt.figure(figsize=(7, 10), dpi=150)
+gs = gridspec.GridSpec(1, 2, width_ratios=[75,1], wspace=0)
+ax = plt.subplot(gs[0, 0])
+sPlot = ax.imshow(s_ts.x, cmap=plt.cm.jet, alpha=0.75)
+ax.set_xticks([k for k in range(nh)])
+ax.set_xticklabels([(k+1) for k in range(nh)])
+ax.set_yticks( [k for k in range(nl_ts)]   )
+ax.set_yticklabels([str('%.f-%.f' %(from_ts[g],to_ts[g])) for g in range(nl_ts)])
+ax.set_ylabel('Switching (1/0) (MW)')
+ax.set_xlabel('Hora (h)')
+for g in range(nl_ts):
+    for h in range(nh):
+        ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
+plt.show()
+
+
+fig = plt.figure(figsize=(7, 10), dpi=150)
 gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
 ax = plt.subplot(gs[0, 0])
 sPlot = ax.imshow(p_gt.x.T*(Sb/Pmax), cmap=plt.cm.jet, alpha=0.75)
@@ -237,13 +255,16 @@ ax = plt.subplot(gs[0, 0])
 sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
 ax.set_xticks([k for k in range(nh)])
 ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl)]   )
-ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl)])
+ax.set_yticks( [k for k in range(nl_nots)]   )
+ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl_nots)])
 ax.set_ylabel('Flujos (MW)')
 ax.set_xlabel('Hora (h)')
-for g in range(nl):
-    for h in range(nh):
-        ax.text( h, g, np.around(f.x.T[h,g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
+for h in range(nh): 
+    fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
+    fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
+    for g in range(nl_nots):
+        variable=fe+fv
+        ax.text( h, g, np.around(variable.T[g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
 ax = plt.subplot(gs[0, 1])
 fig.colorbar(sPlot, cax=ax, extend='both')
 ax.set_ylabel('Cargabilidad (%)')

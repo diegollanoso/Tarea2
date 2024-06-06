@@ -161,10 +161,19 @@ t2 = time.time() #Tiempo inicial solver
 m.optimize()
 t3 = time.time() #Tiempo final solver
 
+fixed = m.fixed()
+fixed.optimize
+
 status = m.Status
 if status == GRB.Status.OPTIMAL:
     print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cen = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Ce.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
+    print ('Lagrange multipliers:')            
+    for v in fixed.getConstrs():
+        try:
+            print('%s = %g ($/MWh)' % (v.ConstrName,v.pi))
+        except:
+            print('%s No existe :(' % (v.ConstrName))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))

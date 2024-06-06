@@ -42,6 +42,7 @@ Load_bus = sep['bus'][:,2]
 # Transmission data
 nl = len(sep['branch']) # number of transmission elements
 SF = sep['SFR'] # shift-factors
+sep['branch'][23,5] = 100
 FM = sep['branch'][:,5] # thermal limit
 from_b = (sep['branch'][:,0]-1).astype(int)
 to_b = (sep['branch'][:,1]-1).astype(int)
@@ -74,7 +75,7 @@ B = sep['B']
 # Modelación
 m = Model('NCUC')  # se crea el modelo
 m.setParam('OutputFlag', False) # off Gurobi messages
-m.setParam('DualReductions', 0)
+#m.setParam('DualReductions', 0)
 
 #Variables en PU
 p_gt = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='Pg') # variable de generación para cada generador y para cada hora
@@ -86,6 +87,7 @@ ploss = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='pl
 dpk = m.addMVar((nl,L,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='dpk')   # Perdidas por cada línea por cada tramo
 fp = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoP')   # Flujo positivo
 fn = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoN')   # Flujo Negativo
+#n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
 #p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
 
 
@@ -148,6 +150,10 @@ for h in range(nh):     # Ciclo para cada hora
     for l in range(L):
         m.addConstr(-dpk[:,l,h] >= -FM/L/Sb, name = 'LimiteDpk')
     
+    #m.addConstr(-fp[:,h]>=-n_l[:,h]*FM/Sb, name='fp')   #flujo positvo-restriccion de complementaridad
+    #m.addConstr(-fn[:,h]>=(1-n_l[:,h])*(-FM/Sb), name='fn') #flujo nefativo-restriccion de complementaridad
+
+    
 
 
 
@@ -178,10 +184,20 @@ t2 = time.time() #Tiempo inicial solver
 m.optimize()
 t3 = time.time() #Tiempo final solver
 
+#fixed = m.fixed()
+#fixed.optimize
+
+
 status = m.Status
 if status == GRB.Status.OPTIMAL:
+    total_loss = Sb*ploss.sum().getValue()
     print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
+    print ('Total P_loss = %.2f [MW]'%(total_loss))
+    for h in range(nh):
+        for l in range(fp.getAttr('x').shape[0]):
+            if fp.X[l,h]!=0 and fn.X[l,h]!=0:
+                print("f_p[%d,%d] = %.3f// f_n[%d,%d] = %.3f"%(l,h,fp.X[l,h]*Sb,l,h,fn.X[l,h]*Sb))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
