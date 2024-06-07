@@ -46,7 +46,7 @@ sep['branch'][23,5] = 100
 FM = sep['branch'][:,5] # thermal limit
 from_b = (sep['branch'][:,0]-1).astype(int)
 to_b = (sep['branch'][:,1]-1).astype(int)
-L=6
+L=9
 A = sep['S']
 G = sep['G']
 B = sep['B']
@@ -87,7 +87,8 @@ ploss = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='pl
 dpk = m.addMVar((nl,L,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='dpk')   # Perdidas por cada línea por cada tramo
 fp = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoP')   # Flujo positivo
 fn = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoN')   # Flujo Negativo
-#n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
+n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
+n_a = m.addMVar((nl,L,nh), vtype=GRB.BINARY, name='n_a')                                          # variable binaria adyacencia
 #p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
 
 
@@ -150,10 +151,19 @@ for h in range(nh):     # Ciclo para cada hora
     for l in range(L):
         m.addConstr(-dpk[:,l,h] >= -FM/L/Sb, name = 'LimiteDpk')
     
-    #m.addConstr(-fp[:,h]>=-n_l[:,h]*FM/Sb, name='fp')   #flujo positvo-restriccion de complementaridad
-    #m.addConstr(-fn[:,h]>=(1-n_l[:,h])*(-FM/Sb), name='fn') #flujo nefativo-restriccion de complementaridad
+    m.addConstr(-fp[:,h]>=-n_l[:,h]*FM/Sb, name='fp')   #flujo positvo-restriccion de complementaridad
+    m.addConstr(-fn[:,h]>=(1-n_l[:,h])*(-FM/Sb), name='fn') #flujo nefativo-restriccion de complementaridad
 
-    
+    for l in range(L): 
+        if l==0:
+            m.addConstr(-dpk[:,l,h]>=-FM/(Sb*L), name='d_f_Res_max_A_l')
+            m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_l')
+        elif l==L-1:
+            m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*FM/(Sb*L), name='d_f_Res_max_A_L')
+            m.addConstr(dpk[:,l,h]>=0, name='d_f_Res_min_A_L')
+        else:
+            m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*(FM/(Sb*L)), name='d_f_Res_max_A_L-1')
+            m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_L-1')
 
 
 
@@ -194,13 +204,16 @@ if status == GRB.Status.OPTIMAL:
     print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
     print ('Total P_loss = %.2f [MW]'%(total_loss))
-    for h in range(nh):
-        for l in range(fp.getAttr('x').shape[0]):
-            if fp.X[l,h]!=0 and fn.X[l,h]!=0:
-                print("f_p[%d,%d] = %.3f// f_n[%d,%d] = %.3f"%(l,h,fp.X[l,h]*Sb,l,h,fn.X[l,h]*Sb))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
+    for h in range(nh):
+        for l in range(fp.getAttr('x').shape[0]):
+            if fp.X[l,h]!=0 and fn.X[l,h]!=0:
+                print("f_p[%d,%d,%d] = %.3f // f_n[%d,%d,%d] = %.3f" % (from_b[l]+1,to_b[l]+1,h+1,dpk.X[l,0,h]*Sb,from_b[l]+1,to_b[l]+1,h+1,dpk.X[l,1,h]*Sb))
+        for i in range(dpk.getAttr('x').shape[0]):
+            if dpk.X[i,1,h]*Sb>dpk.X[i,0,h]*Sb:
+                print("d_f[%d,%d,%d] = %.3f     -     %.3f " % (from_b[i]+1,to_b[i]+1,h,dpk.X[i,0,h]*Sb,dpk.X[i,1,h]*Sb))
 elif status == GRB.Status.INF_OR_UNBD or \
    status == GRB.Status.INFEASIBLE  or \
    status == GRB.Status.UNBOUNDED:
