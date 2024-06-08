@@ -42,31 +42,31 @@ Load_bus = sep['bus'][:,2]
 # Transmission data
 nl = len(sep['branch']) # number of transmission elements
 SF = sep['SF'] # shift-factors
-sep['branch'][23,5] = 75
 FM = sep['branch'][:,5] # thermal limit
+FM[23] = 75
 from_b = (sep['branch'][:,0]-1).astype(int)
 to_b = (sep['branch'][:,1]-1).astype(int)
-A = sep['S']
 
-# Líneas no candidtas a TS
-pl_nots = np.flatnonzero(sep['branch'][:,17] == 0)    # posicion de lineas no candidatas a ts
-nl_nots = len(pl_nots)                      # numero de lineas no candidatas a ts
+# ERV - wind
+indawind =np.array([31]) # Posición de las barras 32 y 33 en array
+nw=len(indawind)
+wind_max=1.2*np.array([[54,51,49,48,45,43,37,35,32,23,13,10,7,4,3,3,3,4,5,8,16,21,21,21]])
+vert_cost = 50
+#Parametros baterias
+almacenamiento = True 
+n_charging = 0.95
+n_discharging = 0.95
+battery_initial = 1
+battery_max = 50
+carga_max = 7.5
+descarga_max = 3.5
+degradation_cost = 5 
+battery_cost = 10
 
-# Lineas candidatas a TS
-pl_ts = np.flatnonzero(sep['branch'][:,17] == 1)      # posicion de Lineas candidatas a switching
-nl_ts = len(pl_ts)                          # cantidad de lineas candidatas a switching
-index_sinlts = np.delete(np.arange(0,nl),pl_ts, axis=0)
-from_ts=sep['branch'][pl_ts,0]
-to_ts=sep['branch'][pl_ts,1]
 
 
-FM_lnots = np.delete(FM,pl_ts,axis=0)       # flujo de lineas existentes
-FM_lts = np.delete(FM,pl_nots,axis=0)       #flujos de lineas candidatas a ts 
 
-M = 1000000
-costo_ts = 10
-
-# Generador virtual
+## Generador virtual
 #ind1=sep['bus'][:,0]
 #for i in range(len(sep['bus'])):
 #    for j in range(len(sep['gen'])):
@@ -87,20 +87,26 @@ costo_ts = 10
 #CENS=np.ones(len(indaux))*500
 
 # Modelación
-m = Model('NCTS')  # se crea el modelo
+m = Model('NCUC')  # se crea el modelo
 m.setParam('OutputFlag', False) # off Gurobi messages
-m.setParam('DualReductions', 0)
-m.Params.MIPGap = 1e-6
-
+#m.setParam('DualReductions', 0)
 
 #Variables en PU
 p_gt = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='Pg') # variable de generación para cada generador y para cada hora
 b_gt = m.addMVar((ng,nh), vtype=GRB.BINARY, name='n_G') # variable binaria que indica estado de encendido/apagado de generador.
 pbar_gt = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='Pbar_gt') # potencia de reserva de cada generador en cada hora
 C_on = m.addMVar((ng,nh), vtype=GRB.CONTINUOUS, lb=0, name='CU')  # costos de encendido
-f = m.addMVar((nl_ts,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name="flujo")   #flujos de cada linea en cada hora
-s_ts = m.addMVar((nl_ts, nh), vtype=GRB.BINARY, name='s_ts')                                    # variable binaria de TS
+f = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=-GRB.INFINITY, ub=GRB.INFINITY, name='f')   # Flujo por cada línea
+p_w = m.addMVar((nw,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='p_w')   # Potencia de gen eolica
+pw_cu = m.addMVar((nw,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='pw_cu')   # Flujo por cada línea
 #p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
+if almacenamiento:
+    p_charging= m.addMVar((nw,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='P_charging')
+    p_discharging= m.addMVar((nw,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='P_discharging')
+    e_battery = m.addMVar((nw,nh), vtype=GRB.CONTINUOUS,lb=0, ub=GRB.INFINITY, name='b_battery')
+    b_charging=m.addMVar((nw,nh), vtype=GRB.BINARY, name='b_charging')
+    b_discharging=m.addMVar((nw,nh), vtype=GRB.BINARY, name='b_discharging')
+
 
 
 # Optimization Function
@@ -108,7 +114,9 @@ f_obj = 0 # OF
 Cop = 0
 Cup = 0
 Ce = 0 
-Cts = 0
+Cbattery = 0
+Cdegradation = 0
+Cvertimiento = 0
 
 for h in range(nh):     # Ciclo para cada hora
     # Costos por uso
@@ -116,30 +124,32 @@ for h in range(nh):     # Ciclo para cada hora
     Cop += p_gt[:,h]*Sb @ np.diag(sep["units"][:,2]) @ p_gt[:,h]*Sb + sep["units"][:,1] @ p_gt[:,h]*Sb + sep["units"][:,0] @ b_gt[:,h] 
     # Costos por encender unidades
     Cup += C_on[:,h].sum()
-    # Costo Transmission Switching
-    Cts += costo_ts * (1-s_ts[:,h]).sum()
     # Costos generador Virtual
     #Ce += CENS @ p_ens[:,h]*Sb
-    
+    Cvertimiento += vert_cost*Sb*(pw_cu[:,h].sum())
+    if almacenamiento:
+        Cdegradation +=degradation_cost*Sb*(p_charging[:,h]+p_discharging[:,h]).sum()
+        Cbattery +=battery_cost*Sb*(e_battery[:,h].sum())
 
-f_obj = Cop + Cup + Ce + Cts
+f_obj = Cop + Cup + Ce + Cdegradation + Cbattery + Cvertimiento
 
 m.setObjective(f_obj, GRB.MINIMIZE)
 m.getObjective()
-
-#Creación de restricciones
-
 
 for h in range(nh):     # Ciclo para cada hora
     #Balance Nodal
     # (Suma de MW gens) = (Dda)
     dda_bus = Dda[h] * Load_bus
-    m.addConstr(p_gt[:,h].sum()  == Dda[h]/Sb, name = 'Balance')
+    if not almacenamiento:
+        m.addConstr(p_gt[:,h].sum() + p_w[:,h].sum() - pw_cu[:,h].sum() == Dda[h]/Sb, name = 'Balance')
+    if almacenamiento:
+        m.addConstr(p_gt[:,h].sum() + p_w[:,h].sum() - pw_cu[:,h].sum() - p_charging[:,h].sum() + p_discharging[:,h].sum() == Dda[h]/Sb, name = 'Balance')
     #m.addConstr( A.T @ f[:,h] == Cg@p_gt[:,h] +Cens@pens[:,h]- Dda_bus/Sb, name="Balance nodal") 
     # (Reserva total de gens) >= (110% Dda)
     m.addConstr( pbar_gt[:,h].sum() >= 1.1*Dda[h]/Sb, name="Reserva")
     # Limitación de Gen Virtual
     #m.addConstr(-p_ens[:,h] >= -500/Sb, name='P_maxens')
+    m.addConstr(p_w[:,h] + pw_cu[:,h] == wind_max[:,h]/Sb, name='BalanceViento')
 
 
     # Pmin y Pmax de P y P_disp
@@ -147,7 +157,7 @@ for h in range(nh):     # Ciclo para cada hora
     m.addConstr( -p_gt[:,h] >= -pbar_gt[:,h] , name="Pmax")            # Ecuación (9) Carrión - Arroyo  
     m.addConstr( pbar_gt[:,h] >= 0, name="Pmin_r")                     # Ecuación (10) Carrión - Arroyo  
     m.addConstr( -pbar_gt[:,h] >= -(np.diag(Pmax) @ b_gt[:,h])/Sb , name="Pmax_r")  # Ecuación (10) Carrión - Arroyo  
-    
+
     #Costos de encendido
     if h==0:
         m.addConstr( C_on[:,h] >= np.diag(CUg)@(b_gt[:,h]-b_g0) )       # Ecuación (3) Carrión - Arroyo  
@@ -155,24 +165,24 @@ for h in range(nh):     # Ciclo para cada hora
         m.addConstr( C_on[:,h] >= np.diag(CUg)@(b_gt[:,h]-b_gt[:,h-1]) )    # Ecuación (3) Carrión - Arroyo  
 
     # Sistema de transmisión
-    #Restricciones sistema de transmisión lineas no candidatas    
-    fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h] - SF[pl_nots,:]@dda_bus/Sb
-    fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h]
-    m.addConstr(-(fe+fv) >= -FM_lnots/Sb, name = 'fe_p')
-    m.addConstr(fe+fv >= -FM_lnots/Sb, name = 'fe_n')
+    if not almacenamiento:
+        m.addConstr(f[:,h]== SF[:,pos_g] @ p_gt[:,h] + SF[:,indawind] @ (p_w[:,h] - pw_cu[:,h])- SF @ dda_bus/Sb)
+    if almacenamiento:
+        m.addConstr(f[:,h]== SF[:,pos_g] @ p_gt[:,h] + SF[:,indawind] @ (p_w[:,h] - pw_cu[:,h]) + SF[:,indawind] @ (-p_charging[:,h] + p_discharging[:,h])- SF @ dda_bus/Sb)
+    m.addConstr(-f[:,h] >= -FM/Sb, name = 'fp')
+    m.addConstr(f[:,h] >= -FM/Sb, name = 'fn')   
 
-    #Restricciones sistema de transmisión lineas candidatas
-    f1 = SF[pl_ts,:][:,pos_g] @ p_gt[:,h] - SF[pl_ts,:]@dda_bus/Sb
-    f2 = f[:,h] - (SF[pl_ts,:]@A[pl_ts,:].T) @ f[:,h] 
-
-    m.addConstr(f1-f2 <= np.diag(FM_lts)/Sb @ s_ts[:,h], name = 'fs1_p') # 1
-    m.addConstr(f1-f2 >= -np.diag(FM_lts)/Sb @ s_ts[:,h], name = 'fs1_n')
-    
-    m.addConstr(f[:,h] <= M*(1 - s_ts[:,h]), name = 'fs2_p') # 2
-    m.addConstr(f[:,h] >= -M*(1 - s_ts[:,h]), name = 'fs2_n') # 2
-
-    #m.addConstr(f[:,h] <= M*(np.ones(nl_ts)).T - np.diag(M*(np.ones(nl_ts))) @ s_ts[:,h], name = 'fs2_p') # 2
-    #m.addConstr(f[:,h] >= -M*(np.ones(nl_ts)).T + np.diag(M*(np.ones(nl_ts))) @ s_ts[:,h], name = 'fs2_n') 
+    #Almacenamiento
+    if almacenamiento:
+        if h==0:
+            m.addConstr( e_battery[:,h]==battery_initial/Sb+p_charging[:,h]*n_charging-p_discharging[:,h]/n_discharging, name="Estado en la hora 0")
+        else:
+            m.addConstr(e_battery[:,h]==e_battery[:,h-1]+p_charging[:,h]*n_charging-p_discharging[:,h]/n_discharging, name="Estado en la hora n")
+        m.addConstr(-p_charging[:,h]*n_charging>=-(carga_max/Sb)*b_charging[:,h], name="Limite carga")
+        m.addConstr(-p_discharging[:,h]/n_discharging>=-(descarga_max/Sb)*b_discharging[:,h], name="Limite descarga")
+        m.addConstr(-(b_charging[:,h]+b_discharging[:,h])>=-1, name="carga o descarga")
+        m.addConstr(-pw_cu[:,h]>=-wind_max[:,h]+p_w[:,h]-p_charging[:,h], name="Almacenar vertimiento")
+        m.addConstr( battery_initial/Sb==e_battery[:,23], name="incio/final") 
 
 
 #Rampas 
@@ -196,17 +206,25 @@ for h in range(nh-1):
 
 
 t1 = time.time() # Tiempo final formulación
-m.write('NCTS.lp')
+m.write('NCUC.lp')
 
 # SOLVER & INFO
 t2 = time.time() #Tiempo inicial solver
 m.optimize()
 t3 = time.time() #Tiempo final solver
 
+fixed = m.fixed()
+fixed.optimize
+
 status = m.Status
 if status == GRB.Status.OPTIMAL:
-    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cts = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Cts.getValue()))
+    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
+    for h in range(nh):
+        for w in range(p_w.getAttr('x').shape[0]):
+            print("P_wind[%d,%d] = %.3f" % (w+1,h+1,p_w.X[w,h]*Sb))
+        for w in range(pw_cu.getAttr('x').shape[0]):
+            print("P_cw[%d,%d] = %.3f" % (w+1,h+1,pw_cu.X[w,h]*Sb))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
@@ -214,23 +232,6 @@ elif status == GRB.Status.INF_OR_UNBD or \
    status == GRB.Status.INFEASIBLE  or \
    status == GRB.Status.UNBOUNDED:
    print('The model cannot be solved because it is infeasible or unbounded => status "%d"' % status)
-
-fig = plt.figure(figsize=(7, 10), dpi=150)
-gs = gridspec.GridSpec(1, 2, width_ratios=[75,1], wspace=0)
-ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(s_ts.x, cmap=plt.cm.jet, alpha=0.75)
-ax.set_xticks([k for k in range(nh)])
-ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl_ts)]   )
-ax.set_yticklabels([str('%.f-%.f' %(from_ts[g],to_ts[g])) for g in range(nl_ts)])
-ax.set_ylabel('Switching (1/0) (MW)')
-ax.set_xlabel('Hora (h)')
-for g in range(nl_ts):
-    for h in range(nh):
-        ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
-plt.savefig('flujo_lineas_TS.pdf')
-plt.show()
-
 
 fig = plt.figure(figsize=(7, 10), dpi=150)
 gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
@@ -256,18 +257,16 @@ ax = plt.subplot(gs[0, 0])
 sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
 ax.set_xticks([k for k in range(nh)])
 ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl_nots)])
-ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl_nots)])
+ax.set_yticks( [k for k in range(nl)]   )
+ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl)])
 ax.set_ylabel('Flujos (MW)')
 ax.set_xlabel('Hora (h)')
-for h in range(nh): 
-    fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
-    fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
-    for g in range(nl_nots):
-        variable=fe+fv
-        ax.text( h, g, np.around(variable.T[g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
-    ax = plt.subplot(gs[0, 1])
+for g in range(nl):
+    for h in range(nh):
+        ax.text( h, g, np.around(f.x.T[h,g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
+ax = plt.subplot(gs[0, 1])
 fig.colorbar(sPlot, cax=ax, extend='both')
 ax.set_ylabel('Cargabilidad (%)')
 plt.savefig('flujo_lineas.pdf')
-plt.show()
+plt.show()        
+print('Finish!')
