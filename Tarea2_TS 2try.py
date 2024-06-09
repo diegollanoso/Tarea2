@@ -215,59 +215,127 @@ elif status == GRB.Status.INF_OR_UNBD or \
    status == GRB.Status.UNBOUNDED:
    print('The model cannot be solved because it is infeasible or unbounded => status "%d"' % status)
 
+if True:
+    fig = plt.figure(figsize=(7, 10), dpi=150)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[75,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(s_ts.x, cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(nh)])
+    ax.set_xticklabels([(k+1) for k in range(nh)])
+    ax.set_yticks( [k for k in range(nl_ts)]   )
+    ax.set_yticklabels([str('%.f-%.f' %(from_ts[g],to_ts[g])) for g in range(nl_ts)])
+    ax.set_ylabel('Switching (1/0) (MW)')
+    ax.set_xlabel('Hora (h)')
+    for g in range(nl_ts):
+        for h in range(nh):
+            ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
+    plt.savefig('flujo_lineas_ts_on/off.pdf')
+    plt.show()
+
+if True:
+    fig = plt.figure(figsize=(7, 10), dpi=150)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(p_gt.x.T*(Sb/Pmax), cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(ng)])
+    ax.set_xticklabels([str(k+1) for k in range(ng)])
+    ax.set_yticks([k for k in range(nh)])
+    ax.set_ylabel('Tiempo (h)')
+    ax.set_xlabel('Generadores')
+    for g in range(ng):
+        for h in range(nh):
+            ax.text(g, h, np.around(p_gt.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
+    ax = plt.subplot(gs[0, 1])
+    fig.colorbar(sPlot, cax=ax, extend='both')
+    ax.set_ylabel('Cargabilidad (%)')
+    plt.show()
+
+if True:
+    f_nots = np.zeros((nl_nots,nh))
+    for h in range(nh): 
+        fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
+        fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
+        variable=fe+fv
+        f_nots[:,h] = (variable)*Sb
+    from_b_nots = from_b[pl_nots]
+    to_b_nots = to_b[pl_nots]
+
+    fig = plt.figure(figsize=(7, 10), dpi=70)
+    gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+    ax = plt.subplot(gs[0, 0])
+    sPlot = ax.imshow(f_nots, cmap=plt.cm.jet, alpha=0.75)
+    ax.set_xticks([k for k in range(nh)])
+    ax.set_xticklabels([(k+1) for k in range(nh)])
+    ax.set_yticks( [k for k in range(nl_nots)])
+    ax.set_yticklabels([str('%.f-%.f' %(from_b_nots[g]+1,to_b_nots[g]+1)) for g in range(nl_nots)])
+    ax.set_ylabel('Flujos (MW)')
+    ax.set_xlabel('Hora (h)')
+    for h in range(nh):
+        fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
+        fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
+        variable=fe+fv
+        for l in range(nl_nots):
+            ax.text( h, l, np.around(variable.T[l].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
+    ax = plt.subplot(gs[0, 1])
+    fig.colorbar(sPlot, cax=ax, extend='both')
+    ax.set_ylabel('Cargabilidad (%)')
+    plt.savefig('flujo_lineas_nots.pdf')
+    plt.show()
+
+
+resta = np.zeros((nl_ts,nh))
+for h in range(nh):
+    dda_bus = Dda[h] * Load_bus
+    f1 = SF[pl_ts,:][:,pos_g] @ p_gt.x[:,h] - SF[pl_ts,:]@dda_bus/Sb
+    f2 = f.x[:,h] - (SF[pl_ts,:]@A[pl_ts,:].T) @ f.x[:,h] 
+    resta[:,h] = f1-f2
+
+
+from_b_ts = from_b[pl_ts]
+to_b_ts = to_b[pl_ts]
+
 fig = plt.figure(figsize=(7, 10), dpi=150)
 gs = gridspec.GridSpec(1, 2, width_ratios=[75,1], wspace=0)
 ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(s_ts.x, cmap=plt.cm.jet, alpha=0.75)
+sPlot = ax.imshow(resta, cmap=plt.cm.jet, alpha=0.75)
 ax.set_xticks([k for k in range(nh)])
 ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl_ts)]   )
-ax.set_yticklabels([str('%.f-%.f' %(from_ts[g],to_ts[g])) for g in range(nl_ts)])
-ax.set_ylabel('Switching (1/0) (MW)')
-ax.set_xlabel('Hora (h)')
-for g in range(nl_ts):
-    for h in range(nh):
-        ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
-plt.savefig('flujo_lineas_TS.pdf')
-plt.show()
-
-
-fig = plt.figure(figsize=(7, 10), dpi=150)
-gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
-ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(p_gt.x.T*(Sb/Pmax), cmap=plt.cm.jet, alpha=0.75)
-ax.set_xticks([k for k in range(ng)])
-ax.set_xticklabels([str(k+1) for k in range(ng)])
-ax.set_yticks([k for k in range(nh)])
-ax.set_ylabel('Tiempo (h)')
-ax.set_xlabel('Generadores')
-for g in range(ng):
-    for h in range(nh):
-        ax.text(g, h, np.around(p_gt.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
-ax = plt.subplot(gs[0, 1])
-fig.colorbar(sPlot, cax=ax, extend='both')
-ax.set_ylabel('Cargabilidad (%)')
-plt.show()
-
-
-fig = plt.figure(figsize=(7, 10), dpi=70)
-gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
-ax = plt.subplot(gs[0, 0])
-sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
-ax.set_xticks([k for k in range(nh)])
-ax.set_xticklabels([(k+1) for k in range(nh)])
-ax.set_yticks( [k for k in range(nl_nots)])
-ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl_nots)])
+ax.set_yticks( [k for k in range(nl_ts)])
+ax.set_yticklabels([str('%.f-%.f' %(from_b_ts[g]+1,to_b_ts[g]+1)) for g in range(nl_ts)])
 ax.set_ylabel('Flujos (MW)')
 ax.set_xlabel('Hora (h)')
-for h in range(nh): 
-    fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
-    fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
-    for g in range(nl_nots):
-        variable=fe+fv
-        ax.text( h, g, np.around(variable.T[g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
-    ax = plt.subplot(gs[0, 1])
-fig.colorbar(sPlot, cax=ax, extend='both')
-ax.set_ylabel('Cargabilidad (%)')
-plt.savefig('flujo_lineas.pdf')
+for h in range(nh):
+    for l in range(nl_ts):
+        ax.text( h, l, np.around(resta[l,h]*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
+#ax = plt.subplot(gs[0, 1])
+#fig.colorbar(sPlot, cax=ax, extend='both')
+#ax.set_ylabel('Cargabilidad (%)')
+plt.savefig('flujo_lineas_ts.pdf')
 plt.show()
+
+
+
+
+#fig = plt.figure(figsize=(7, 10), dpi=70)
+#gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+#ax = plt.subplot(gs[0, 0])
+#sPlot = ax.imshow(f.x, cmap=plt.cm.jet, alpha=0.75)
+#ax.set_xticks([k for k in range(nh)])
+#ax.set_xticklabels([(k+1) for k in range(nh)])
+#ax.set_yticks( [k for k in range(nl_nots+nl_ts)])
+#ax.set_yticklabels([str('%.f-%.f' %(from_b[g]+1,to_b[g]+1)) for g in range(nl_nots+nl_ts)])
+#ax.set_ylabel('Flujos (MW)')
+#ax.set_xlabel('Hora (h)')
+#all_f = np.zeros((nl_ts + nl_nots,nh))
+#for h in range(nh): 
+#    fe = SF[pl_nots,:][:,pos_g] @ p_gt[:,h].x - SF[pl_nots,:]@dda_bus/Sb
+#    fv = (SF[pl_nots,:] @ A[pl_ts,:].T) @ f[:,h].x
+#    variable=fe+fv
+#    for g in range(nl_nots):
+#        ax.text( h, g, np.around(variable.T[g].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=4)
+#    all_f[pl_nots,h] = (fe + fv)*Sb
+#    ax = plt.subplot(gs[0, 1])
+#fig.colorbar(sPlot, cax=ax, extend='both')
+#ax.set_ylabel('Cargabilidad (%)')
+#plt.savefig('flujo_lineas.pdf')
+#plt.show()
