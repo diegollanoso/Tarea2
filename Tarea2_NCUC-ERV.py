@@ -218,13 +218,15 @@ fixed.optimize
 
 status = m.Status
 if status == GRB.Status.OPTIMAL:
-    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue()))
+    print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cvert = %.2f ($) + Cbatt = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Cvertimiento.getValue(),Cdegradation.getValue()+Cbattery.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
     for h in range(nh):
         for w in range(p_w.getAttr('x').shape[0]):
             print("P_wind[%d,%d] = %.3f" % (w+1,h+1,p_w.X[w,h]*Sb))
         for w in range(pw_cu.getAttr('x').shape[0]):
             print("P_cw[%d,%d] = %.3f" % (w+1,h+1,pw_cu.X[w,h]*Sb))
+        for b in range(e_battery.getAttr('x').shape[0]):
+            print("P_batt[%d,%d] = %.3f" % (b+1,h+1,e_battery.X[b,h]*Sb))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
