@@ -229,7 +229,7 @@ if True:
     for g in range(nl_ts):
         for h in range(nh):
             ax.text( h, g, np.around(s_ts.x.T[h,g],1).astype(int), color='black', ha='center', va='center', fontsize=12)
-    plt.savefig('flujo_lineas_ts_on/off.pdf')
+    plt.savefig('flujo_lineas_ts_on-off.pdf')
     plt.show()
 
 if True:
