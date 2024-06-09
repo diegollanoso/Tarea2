@@ -88,7 +88,7 @@ dpk = m.addMVar((nl,L,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='dp
 fp = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoP')   # Flujo positivo
 fn = m.addMVar((nl,nh), vtype=GRB.CONTINUOUS, lb=0, ub=GRB.INFINITY, name='flujoN')   # Flujo Negativo
 n_l = m.addMVar((nl,nh), vtype=GRB.BINARY, name='n_l')                                          # variable binaria complentaridad
-n_a = m.addMVar((nl,L,nh), vtype=GRB.BINARY, name='n_a')                                          # variable binaria adyacencia
+#n_a = m.addMVar((nl,L,nh), vtype=GRB.BINARY, name='n_a')                                          # variable binaria adyacencia
 #p_ens = m.addMVar((len(indaux),nh), vtype=GRB.CONTINUOUS, lb=0, name='P_ens')    # variable de generacion virtual
 
 
@@ -154,16 +154,16 @@ for h in range(nh):     # Ciclo para cada hora
     m.addConstr(-fp[:,h]>=-n_l[:,h]*FM/Sb, name='fp')   #flujo positvo-restriccion de complementaridad
     m.addConstr(-fn[:,h]>=(1-n_l[:,h])*(-FM/Sb), name='fn') #flujo nefativo-restriccion de complementaridad
 
-    for l in range(L): 
-        if l==0:
-            m.addConstr(-dpk[:,l,h]>=-FM/(Sb*L), name='d_f_Res_max_A_l')
-            m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_l')
-        elif l==L-1:
-            m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*FM/(Sb*L), name='d_f_Res_max_A_L')
-            m.addConstr(dpk[:,l,h]>=0, name='d_f_Res_min_A_L')
-        else:
-            m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*(FM/(Sb*L)), name='d_f_Res_max_A_L-1')
-            m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_L-1')
+    #for l in range(L): 
+    #    if l==0:
+    #        m.addConstr(-dpk[:,l,h]>=-FM/(Sb*L), name='d_f_Res_max_A_l')
+    #        m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_l')
+    #    elif l==L-1:
+    #        m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*FM/(Sb*L), name='d_f_Res_max_A_L')
+    #        m.addConstr(dpk[:,l,h]>=0, name='d_f_Res_min_A_L')
+    #    else:
+    #        m.addConstr(-dpk[:,l,h]>=-n_a[:,l-1,h]*(FM/(Sb*L)), name='d_f_Res_max_A_L-1')
+    #        m.addConstr(dpk[:,l,h]>=n_a[:,l,h]*(FM/(Sb*L)), name='d_f_Res_min_A_L-1')
 
 
 

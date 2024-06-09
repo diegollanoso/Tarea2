@@ -226,7 +226,7 @@ if status == GRB.Status.OPTIMAL:
         for w in range(pw_cu.getAttr('x').shape[0]):
             print("P_cw[%d,%d] = %.3f" % (w+1,h+1,pw_cu.X[w,h]*Sb))
         for b in range(e_battery.getAttr('x').shape[0]):
-            print("P_batt[%d,%d] = %.3f" % (b+1,h+1,e_battery.X[b,h]*Sb))
+            print("E_batt[%d,%d] = %.3f" % (b+1,h+1,e_battery.X[b,h]*Sb))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))

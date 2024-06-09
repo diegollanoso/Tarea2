@@ -168,12 +168,6 @@ status = m.Status
 if status == GRB.Status.OPTIMAL:
     print ('Cost = %.2f ($) => Cop = %.2f ($) + Cup = %.2f ($) + Cen = %.2f ($)' % (m.objVal,Cop.getValue(),Cup.getValue(),Ce.getValue()))
     print('num_Vars =  %d / num_Const =  %d / num_NonZeros =  %d' % (m.NumVars,m.NumConstrs,m.DNumNZs)) #print('num_Vars =  %d / num_Const =  %d' % (len(m.getVars()), len(m.getConstrs())))      
-    print ('Lagrange multipliers:')            
-    for v in fixed.getConstrs():
-        try:
-            print('%s = %g ($/MWh)' % (v.ConstrName,v.pi))
-        except:
-            print('%s No existe :(' % (v.ConstrName))
     print('=> Formulation time: %.4f (s)'% (t1-t0))
     print('=> Solution time: %.4f (s)' % (t3-t2))
     print('=> Solver time: %.4f (s)' % (m.Runtime))
@@ -218,3 +212,19 @@ fig.colorbar(sPlot, cax=ax, extend='both')
 ax.set_ylabel('Cargabilidad (%)')
 plt.savefig('flujo_lineas.pdf')
 plt.show()        
+
+
+fig = plt.figure(figsize=(7, 10), dpi=100)
+gs = gridspec.GridSpec(1, 2, width_ratios=[20,1], wspace=0)
+ax = plt.subplot(gs[0, 0])
+sPlot = ax.imshow(p_ens.x.T*(Sb/500), cmap=plt.cm.jet, alpha=0.75)
+ax.set_xticks([k for k in range(len(indaux))])
+ax.set_xticklabels([str(indaux[k]+1) for k in range(len(indaux))])
+ax.set_yticks([k for k in range(nh)])
+ax.set_yticklabels([str(k+1) for k in range(nh)])
+ax.set_ylabel('Tiempo (h)')
+ax.set_xlabel('Barras generadores virtuales')
+for g in range(len(indaux)): 
+    for h in range(nh):
+        ax.text(g, h, np.around(p_ens.x[g,h].T*Sb,1).astype(int), color='black', ha='center', va='center', fontsize=5)
+plt.show()

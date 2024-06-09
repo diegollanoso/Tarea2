@@ -88,7 +88,7 @@ costo_ts = 10
 
 # Modelación
 m = Model('NCTS')  # se crea el modelo
-m.setParam('OutputFlag', False) # off Gurobi messages
+m.setParam('OutputFlag', True) # off Gurobi messages
 m.setParam('DualReductions', 0)
 m.Params.MIPGap = 1e-6
 
